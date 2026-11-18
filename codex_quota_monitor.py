@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -67,7 +68,7 @@ def get_limits():
             if not isinstance(reply, dict) or reply.get("id") != req_id:
                 continue
             if "error" in reply:
-                raise RuntimeError(f"RPC error: {method}")  # Never log untrusted error payload.
+                raise RuntimeError(f"RPC error: {method}")
             result = reply.get("result")
             if not isinstance(result, dict):
                 raise RuntimeError(f"Invalid RPC response: {method}")
@@ -133,10 +134,45 @@ def reset_time(timestamp):
     return datetime.fromtimestamp(timestamp, tz=TIMEZONE).strftime("%m-%d %H:%M")
 
 
-def notify_feishu(low):
+def feishu_signature(timestamp, secret):
+    """Feishu custom-bot signing: HMAC key=timestamp+'\\n'+secret, message=empty."""
+    string_to_sign = f"{timestamp}\n{secret}"
+    digest = hmac.new(string_to_sign.encode("utf-8"), b"", hashlib.sha256).digest()
+    return base64.b64encode(digest).decode("utf-8")
+
+
+def send_feishu_text(text):
     webhook = os.getenv("FEISHU_WEBHOOK")
     if not webhook or not webhook.startswith("https://"):
         raise RuntimeError("未配置有效的 FEISHU_WEBHOOK")
+    payload = {"msg_type": "text", "content": {"text": text}}
+    secret = os.getenv("FEISHU_SIGN_SECRET")
+    if secret:
+        stamp = str(int(time.time()))
+        payload.update({"timestamp": stamp, "sign": feishu_signature(stamp, secret)})
+    req = urllib.request.Request(
+        webhook, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as res:
+            body = res.read(4096)
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"飞书 HTTP 错误：{exc.code}") from None
+    except urllib.error.URLError:
+        raise RuntimeError("飞书网络请求失败") from None
+    try:
+        reply = json.loads(body) if body else {}
+    except json.JSONDecodeError:
+        raise RuntimeError("飞书返回非 JSON 响应") from None
+    if not isinstance(reply, dict):
+        raise RuntimeError("飞书返回格式异常")
+    code = reply.get("code", reply.get("StatusCode", 0))
+    if code != 0:
+        raise RuntimeError(f"飞书机器人返回业务错误 code={code}")
+
+
+def notify_feishu(low):
     lines = [f"[Codex额度预警] 剩余额度低于 {THRESHOLD:g}%", "账号：ChatGPT Plus"]
     for w in low:
         duration = f"{w['minutes']}分钟" if w["minutes"] is not None else w["window"]
@@ -144,27 +180,23 @@ def notify_feishu(low):
             f"• {w['bucket']} / {duration}：剩余 {w['remaining']:g}%；"
             f"重置 {reset_time(w['resets'])}（北京时间）"
         )
-    payload = {"msg_type": "text", "content": {"text": "\n".join(lines)}}
-    if os.getenv("FEISHU_SIGN_SECRET"):
-        stamp = str(int(time.time()))
-        material = f"{stamp}\n{os.environ['FEISHU_SIGN_SECRET']}".encode()
-        sig = hmac.new(material, b"", hashlib.sha256).digest()
-        payload.update({"timestamp": stamp, "sign": base64.b64encode(sig).decode()})
-    req = urllib.request.Request(
-        webhook, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=15) as res:
-        body = res.read(4096)
-    reply = json.loads(body) if body else {}
-    if not isinstance(reply, dict) or reply.get("code", reply.get("StatusCode", 0)) != 0:
-        raise RuntimeError("飞书机器人返回业务错误")
+    send_feishu_text("\n".join(lines))
+
+
+def send_test_feishu():
+    send_feishu_text("[Codex额度监控] 飞书机器人连通性测试：部署配置成功。此消息不代表额度不足。")
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dry-run", action="store_true", help="读取真实额度，但不发飞书消息")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--dry-run", action="store_true", help="读取真实额度，但不发飞书消息")
+    modes.add_argument("--test-feishu", action="store_true", help="只发送一条标记为测试的飞书消息")
     args = parser.parse_args()
+    if args.test_feishu:
+        send_test_feishu()
+        print("飞书测试消息已发送")
+        return
     windows = collect_windows(get_limits())
     low = [w for w in windows if w["remaining"] < THRESHOLD]
     if low and not args.dry_run:
