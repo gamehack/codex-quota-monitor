@@ -7,6 +7,7 @@ APP=/opt/codex-quota-monitor
 CONF=/etc/codex-quota-monitor
 ENV_FILE="$CONF/monitor.env"
 CODEX_USER=ubuntu
+CODEX_GROUP="$(id -gn "$CODEX_USER")"
 CODEX_BIN=/home/ubuntu/.npm-global/bin/codex
 CODEX_HOME=/home/ubuntu/.codex
 
@@ -19,7 +20,7 @@ if [[ ! -x "$CODEX_BIN" || ! -d "$CODEX_HOME" ]]; then
   exit 1
 fi
 
-install -d -o "$CODEX_USER" -g "$CODEX_USER" -m 700 "$CONF"
+install -d -o "$CODEX_USER" -g "$CODEX_GROUP" -m 700 "$CONF"
 read -r -s -p "请输入飞书群机器人 Webhook（输入不回显）: " FEISHU_WEBHOOK
 printf '\n'
 if [[ "$FEISHU_WEBHOOK" != https://open.feishu.cn/open-apis/bot/v2/hook/* ]]; then
@@ -44,7 +45,7 @@ trap cleanup EXIT
     printf 'export FEISHU_SIGN_SECRET=%q\n' "$FEISHU_SIGN_SECRET"
   fi
 } > "$TMP"
-chown "$CODEX_USER:$CODEX_USER" "$TMP"
+chown "$CODEX_USER:$CODEX_GROUP" "$TMP"
 chmod 600 "$TMP"
 mv -f "$TMP" "$ENV_FILE"
 unset FEISHU_WEBHOOK FEISHU_SIGN_SECRET
