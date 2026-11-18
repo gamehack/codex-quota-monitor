@@ -18,7 +18,7 @@ sudo git clone https://github.com/gamehack/codex-quota-monitor.git /opt/codex-qu
 
 Determine the Linux owner, existing `codex` binary path, and `CODEX_HOME` of the **current authenticated Codex process**. Do not reinstall or re-login Codex.
 
-Provide the existing Feishu webhook securely as an environment variable to the installer, or pre-create `/etc/codex-quota-monitor/monitor.env` containing `export FEISHU_WEBHOOK=...` (mode `0600`). The bot secret must never be committed to GitHub or printed by a bridge.
+Use the interactive setup script on the host to enter the webhook without echoing it or sending it through Kilo/Agent prompts. It writes the webhook only to `/etc/codex-quota-monitor/monitor.env` (mode `0600`), installs cron, performs a real quota dry-run, and sends one clearly labelled Feishu connectivity test. The webhook and optional signing secret are never committed to GitHub or printed by the script.
 
 Example (replace `ubuntu` and both paths with actual values):
 
@@ -40,7 +40,11 @@ The installer creates `/opt/codex-quota-monitor/.state/`, an owner-readable-only
 ## Validation
 
 ```bash
+sudo bash /opt/codex-quota-monitor/setup_interactive.sh
+
+# Later verification:
 sudo -u ubuntu -H /opt/codex-quota-monitor/run.sh --dry-run
+sudo -u ubuntu -H /opt/codex-quota-monitor/run.sh --test-feishu
 sudo crontab -u ubuntu -l
 sudo tail -n 30 /opt/codex-quota-monitor/.state/cron.log
 python3 -m unittest discover -s tests -v
